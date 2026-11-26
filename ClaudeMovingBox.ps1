@@ -63,6 +63,8 @@ $L = @{
     nothing = 'Nothing to export.'; outdir = 'Output is a folder, using: {0}'
     lconv = 'Conversations : {0}'; lproj = 'Project files  : {0} (skipping: {1})'
     skipf = 'Skipped (cannot read): {0}'
+    linkskip = 'Skipped link (junction/symlink, not packed): {0}'
+    tree = 'Project contents to be packed (check that no folder is missing):'; rootf = '(files in project root)'
     done = 'Done: {0} conversation(s){1} -> {2} ({3} MB, {4} s)'; plusproj = ' + project folder'
     needimp = 'import needs -Zip and -Target'; nozip = 'Zip not found: {0}'
     modeprev = 'Mode           : PREVIEW (nothing written)'; modeimp = 'Mode           : IMPORT'
@@ -90,6 +92,8 @@ $L = @{
     nothing = '沒有東西可以匯出。'; outdir = '輸出位置是資料夾，改存為：{0}'
     lconv = '對話：{0}'; lproj = '專案檔案：{0} (略過：{1})'
     skipf = '已略過 (無法讀取)：{0}'
+    linkskip = '已略過連結 (junction/symlink，未打包)：{0}'
+    tree = '將打包的專案內容 (請確認沒有少資料夾)：'; rootf = '(專案根目錄的檔案)'
     done = '完成：{0} 個對話{1} -> {2} ({3} MB，{4} 秒)'; plusproj = ' + 專案資料夾'
     needimp = 'import 需要 -Zip 與 -Target'; nozip = '找不到 zip：{0}'
     modeprev = '模式：預覽 (不會寫入任何東西)'; modeimp = '模式：還原'
@@ -124,7 +128,7 @@ function Show-Work($st, [string]$activity, [string]$current, [switch]$Force) {
     -Status ($L.st -f $st.Files, $st.TotalFiles, (Format-Size $st.Bytes), (Format-Size $st.Total))
 }
 function Add-TreeFiles([string]$root, [string]$prefix, [string[]]$skipDirs, $list, $st) {
-  # walks the tree without following junctions and without entering excluded folder names
+  # walks the tree without following junctions/symlinks and without entering excluded folder names
   $stack = New-Object 'System.Collections.Generic.Stack[string]'
   $stack.Push($root)
   while ($stack.Count) {
@@ -134,7 +138,10 @@ function Add-TreeFiles([string]$root, [string]$prefix, [string[]]$skipDirs, $lis
     foreach ($i in $infos) {
       if ($i -is [IO.DirectoryInfo]) {
         if ($skipDirs -contains $i.Name) { continue }
-        if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        # skip only real links. OneDrive folders also carry the ReparsePoint attribute but have no LinkType
+        if (($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $i.LinkType -in 'Junction', 'SymbolicLink') {
+          Write-Warning ($L.linkskip -f $i.FullName); continue
+        }
         $stack.Push($i.FullName)
       }
       else {
@@ -214,6 +221,13 @@ if ($Mode -eq 'export') {
     Add-TreeFiles $sess 'sessions' @() $items $st
     if (-not $NoProject) { Add-TreeFiles $Project 'project' $Exclude $items $st }
     Write-Progress -Activity $L.scan -Completed
+    if (-not $NoProject) {
+      # per top-level folder file counts, so a missing folder is visible at a glance
+      Write-Host $L.tree
+      $items | Where-Object { $_.Entry.StartsWith('project/') } |
+        Group-Object { $p = $_.Entry.Split('/'); if ($p.Count -gt 2) { $p[1] + '\' } else { $L.rootf } } |
+        Sort-Object Name | ForEach-Object { Write-Host ('  {0,6}  {1}' -f $_.Count, $_.Name) }
+    }
     Write-Host ($L.total -f $st.TotalFiles, (Format-Size $st.Total))
     $n = @(Get-ChildItem -LiteralPath $sess -Filter *.jsonl -File).Count
 
